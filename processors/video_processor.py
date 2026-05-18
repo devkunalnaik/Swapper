@@ -81,9 +81,28 @@ class VideoProcessor:
                 cap.release()
                 return None, "No face detected in source image."
 
-        # Seek to start_frame for resume support
+        # ── Seek to start_frame — use FFmpeg cut for instant seek ──────────────
+        # cap.set(POS_FRAMES) is slow: OpenCV decodes every frame up to the
+        # target.  FFmpeg keyframe-seeks in milliseconds.
+        segment_path = None
         if start_frame > 0:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            start_time = start_frame / fps
+            segment_path = tempfile.mktemp(suffix="_segment.mp4")
+            try:
+                import ffmpeg as _ffmpeg
+                (
+                    _ffmpeg.input(video_path, ss=start_time)
+                    .output(segment_path, c="copy", avoid_negative_ts="make_zero")
+                    .overwrite_output()
+                    .run(quiet=True)
+                )
+                cap.release()
+                cap = cv2.VideoCapture(segment_path)
+                print(f"[VideoProcessor] Resumed via FFmpeg cut at frame {start_frame} ({start_time:.2f}s)")
+            except Exception as e:
+                print(f"[VideoProcessor] FFmpeg seek failed ({e}), falling back to slow seek")
+                segment_path = None
+                cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
         # Use AVI + XVID for the intermediate file — far more reliable than
         # mp4v on Linux (HF Spaces).  FFmpeg converts it to H.264/mp4 after.
@@ -115,10 +134,11 @@ class VideoProcessor:
                         f"(resume at {frame_idx} if interrupted)",
                     )
 
-                # Fast mode only safe for face swap — body swap needs every frame
-                # (body position changes too much between frames to duplicate safely)
-                if fast_mode and mode == "face" and (frame_idx - start_frame) % 2 == 1 and last_result is not None:
-                    writer.write(last_result)
+                # Fast mode: skip odd frames — write the ORIGINAL frame (not a
+                # duplicate) so motion stays smooth with no stutter or blur.
+                # Only applies to face swap; body swap needs every frame.
+                if fast_mode and mode == "face" and (frame_idx - start_frame) % 2 == 1:
+                    writer.write(frame)   # original frame keeps motion fluid
                     frame_idx += 1
                     continue
 
@@ -151,6 +171,11 @@ class VideoProcessor:
         finally:
             cap.release()
             writer.release()
+            if segment_path:
+                try:
+                    os.unlink(segment_path)
+                except OSError:
+                    pass
 
         frames_done = frame_idx - start_frame
         if frames_done == 0:
