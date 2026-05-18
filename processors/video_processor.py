@@ -115,8 +115,9 @@ class VideoProcessor:
                         f"(resume at {frame_idx} if interrupted)",
                     )
 
-                # Fast mode: skip odd frames — duplicate the previous processed result
-                if fast_mode and (frame_idx - start_frame) % 2 == 1 and last_result is not None:
+                # Fast mode only safe for face swap — body swap needs every frame
+                # (body position changes too much between frames to duplicate safely)
+                if fast_mode and mode == "face" and (frame_idx - start_frame) % 2 == 1 and last_result is not None:
                     writer.write(last_result)
                     frame_idx += 1
                     continue
