@@ -41,10 +41,13 @@ class VideoProcessor:
         enhance: bool = False,
         blend_strength: float = 0.85,
         fast_mode: bool = False,     # skip every other frame (~2x speed)
+        start_frame: int = 0,        # resume from this frame index
         progress=None,
     ) -> tuple[str | None, str]:
         """
         Process every frame of *video_path*, applying the selected swap mode.
+        Set *start_frame* > 0 to resume after a dropped connection.
+        Partial output is always saved — even if processing is interrupted.
 
         Returns:
             (output_path, status_message)
@@ -58,12 +61,16 @@ class VideoProcessor:
         height       = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        if total_frames > MAX_FRAMES:
+        # Clamp start_frame
+        start_frame = max(0, min(start_frame, total_frames - 1))
+        remaining   = total_frames - start_frame
+
+        if remaining > MAX_FRAMES:
             cap.release()
             return None, (
-                f"Video has {total_frames} frames — maximum allowed is "
-                f"{MAX_FRAMES} (~{MAX_FRAMES / fps:.0f} s at {fps:.0f} fps). "
-                "Please trim the video and try again."
+                f"Segment starting at frame {start_frame} has {remaining} frames — "
+                f"maximum allowed is {MAX_FRAMES} (~{MAX_FRAMES / fps:.0f} s at {fps:.0f} fps). "
+                "Increase the start frame or trim the video."
             )
 
         # ── Pre-compute source face once (big win for face-swap mode) ─────────
@@ -74,73 +81,93 @@ class VideoProcessor:
                 cap.release()
                 return None, "No face detected in source image."
 
+        # Seek to start_frame for resume support
+        if start_frame > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
         # Temp file for raw processed frames (mp4v codec)
         raw_out_path = tempfile.mktemp(suffix="_raw.mp4")
         fourcc       = cv2.VideoWriter_fourcc(*"mp4v")
         writer       = cv2.VideoWriter(raw_out_path, fourcc, fps, (width, height))
 
-        frame_idx        = 0
+        frame_idx        = start_frame   # absolute frame number in the source video
         processed        = 0
         errors           = 0
-        cached_tgt_faces = None   # reused across DET_INTERVAL frames
-        last_result      = None   # for fast_mode frame duplication
+        cached_tgt_faces = None
+        last_result      = None
 
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-            if progress is not None and total_frames > 0:
-                progress(
-                    frame_idx / total_frames,
-                    f"Processing frame {frame_idx + 1} / {total_frames}",
+                if progress is not None and total_frames > 0:
+                    progress(
+                        (frame_idx - start_frame) / remaining,
+                        f"Frame {frame_idx + 1} / {total_frames}  "
+                        f"(resume at {frame_idx} if interrupted)",
+                    )
+
+                # Fast mode: skip odd frames — duplicate the previous processed result
+                if fast_mode and (frame_idx - start_frame) % 2 == 1 and last_result is not None:
+                    writer.write(last_result)
+                    frame_idx += 1
+                    continue
+
+                # Only re-detect target faces every DET_INTERVAL frames
+                use_cache = (mode == "face") and (frame_idx % DET_INTERVAL != 0) and (cached_tgt_faces is not None)
+
+                result_frame, new_faces = self._process_frame(
+                    source_bgr, frame, mode, enhance, blend_strength,
+                    source_face=source_face,
+                    cached_target_faces=cached_tgt_faces if use_cache else None,
                 )
 
-            # Fast mode: skip odd frames — duplicate the previous processed result
-            if fast_mode and frame_idx % 2 == 1 and last_result is not None:
-                writer.write(last_result)
+                if mode == "face" and new_faces is not None:
+                    cached_tgt_faces = new_faces if new_faces else cached_tgt_faces
+
+                if result_frame is not None:
+                    writer.write(result_frame)
+                    last_result = result_frame
+                    processed += 1
+                else:
+                    writer.write(frame)
+                    last_result = frame
+                    errors += 1
+
                 frame_idx += 1
-                continue
 
-            # Only re-detect target faces every DET_INTERVAL frames
-            use_cache = (mode == "face") and (frame_idx % DET_INTERVAL != 0) and (cached_tgt_faces is not None)
+        except Exception as loop_err:
+            print(f"[VideoProcessor] Loop interrupted at frame {frame_idx}: {loop_err}")
 
-            result_frame, new_faces = self._process_frame(
-                source_bgr, frame, mode, enhance, blend_strength,
-                source_face=source_face,
-                cached_target_faces=cached_tgt_faces if use_cache else None,
-            )
+        finally:
+            cap.release()
+            writer.release()
 
-            # Refresh cache after a detection frame
-            if mode == "face" and new_faces is not None:
-                cached_tgt_faces = new_faces if new_faces else cached_tgt_faces
-
-            if result_frame is not None:
-                writer.write(result_frame)
-                last_result = result_frame
-                processed += 1
-            else:
-                writer.write(frame)  # keep original on failure
-                last_result = frame
-                errors += 1
-
-            frame_idx += 1
-
-        cap.release()
-        writer.release()
+        frames_done = frame_idx - start_frame
+        if frames_done == 0:
+            try:
+                os.unlink(raw_out_path)
+            except OSError:
+                pass
+            return None, f"No frames processed. Try resuming from frame {start_frame}."
 
         # Re-encode with H.264 and merge original audio via FFmpeg
-        final_path = self._ffmpeg_encode(video_path, raw_out_path)
+        # Pass start_time so audio lines up with the resumed segment
+        start_time = start_frame / fps
+        final_path = self._ffmpeg_encode(video_path, raw_out_path, audio_start=start_time)
 
         try:
             os.unlink(raw_out_path)
         except OSError:
             pass
 
+        partial = frames_done < remaining
         status = (
-            f"Done — {processed}/{frame_idx} frames processed"
-            + (f" ({errors} skipped)" if errors else "")
-            + "."
+            f"{'Partial — ' if partial else ''}Frames {start_frame}–{frame_idx - 1} "
+            f"({processed} swapped{', ' + str(errors) + ' skipped' if errors else ''}). "
+            + (f"Resume from frame {frame_idx} to continue." if partial else "Done.")
         )
         return final_path, status
 
@@ -176,9 +203,10 @@ class VideoProcessor:
         return None, None
 
     @staticmethod
-    def _ffmpeg_encode(original_video_path: str, processed_raw_path: str) -> str:
+    def _ffmpeg_encode(original_video_path: str, processed_raw_path: str, audio_start: float = 0.0) -> str:
         """
         Re-encode processed frames as H.264 and copy the original audio track.
+        audio_start: seconds offset into the original audio (for resumed segments).
         Falls back to the raw file if FFmpeg is unavailable.
         """
         final_path = tempfile.mktemp(suffix="_output.mp4")
@@ -186,7 +214,8 @@ class VideoProcessor:
             import ffmpeg
 
             video_stream = ffmpeg.input(processed_raw_path).video
-            audio_stream = ffmpeg.input(original_video_path).audio
+            # Seek audio to match the resumed start position
+            audio_stream = ffmpeg.input(original_video_path, ss=audio_start).audio
 
             (
                 ffmpeg.output(
