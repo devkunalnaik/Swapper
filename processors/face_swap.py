@@ -61,17 +61,18 @@ class FaceSwapper:
         from insightface.app import FaceAnalysis
 
         # Face analysis (buffalo_l auto-downloads on first run)
+        # Initialize face analysis (CPU-only for free HF Spaces tier)
         self._app = FaceAnalysis(
             name="buffalo_l",
-            providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+            providers=["CPUExecutionProvider"],
         )
-        self._app.prepare(ctx_id=0, det_size=(640, 640))
+        self._app.prepare(ctx_id=-1, det_size=(640, 640))
 
         # inswapper model
         _download_file(INSWAPPER_URL, INSWAPPER_PATH)
         self._swapper = insightface.model_zoo.get_model(
             str(INSWAPPER_PATH),
-            providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+            providers=["CPUExecutionProvider"],
         )
 
         self._ready = True
