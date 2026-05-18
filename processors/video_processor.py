@@ -19,7 +19,7 @@ import numpy as np
 from pathlib import Path
 
 MAX_FRAMES   = 600   # ~20 s at 30 fps
-DET_INTERVAL = 5     # re-detect target faces every N frames
+DET_INTERVAL = 1     # detect faces every frame — caching causes flicker when face moves
 
 
 class VideoProcessor:
