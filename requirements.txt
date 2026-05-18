@@ -15,8 +15,7 @@ onnxruntime>=1.16.0
 # Body Segmentation
 rembg>=2.0.50
 
-# Pose Estimation
-mediapipe>=0.10.0
+# Pose Estimation — removed (mediapipe 0.10.14+ drops solutions API on Py3.13)
 
 # Image / Video Processing
 opencv-python-headless>=4.8.0

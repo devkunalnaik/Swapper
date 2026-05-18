@@ -118,7 +118,7 @@ with gr.Blocks(title="Face & Body Swapper", theme=gr.themes.Soft()) as demo:
                     fi_source = gr.Image(label="Source — face to use", type="pil")
                     fi_target = gr.Image(label="Target — image to modify", type="pil")
                     fi_enhance = gr.Checkbox(
-                        label="Enhance output faces (GFPGAN — slower)",
+                        label="Enhance face quality (sharpening + contrast)",
                         value=True,
                     )
                     fi_btn = gr.Button("Swap Faces", variant="primary")
@@ -167,8 +167,8 @@ with gr.Blocks(title="Face & Body Swapper", theme=gr.themes.Soft()) as demo:
                     fv_source = gr.Image(label="Source Face Image", type="pil")
                     fv_target = gr.Video(label="Target Video")
                     fv_enhance = gr.Checkbox(
-                        label="Enhance faces (GFPGAN — much slower per frame)",
-                        value=False,
+                        label="Enhance faces (sharpening + contrast)",
+                        value=True,
                     )
                     fv_btn = gr.Button("Swap Faces in Video", variant="primary")
                 with gr.Column(scale=1):

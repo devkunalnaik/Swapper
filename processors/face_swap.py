@@ -65,10 +65,11 @@ def _download_inswapper() -> None:
             with open(INSWAPPER_PATH, "wb") as f:
                 for chunk in resp.iter_content(chunk_size=65536):
                     f.write(chunk)
-            if INSWAPPER_PATH.stat().st_size > 100_000:
+            if INSWAPPER_PATH.stat().st_size > 500_000_000:  # ~554 MB expected
                 print(f"[FaceSwapper] Saved to {INSWAPPER_PATH}")
                 return
             INSWAPPER_PATH.unlink(missing_ok=True)
+            print("[FaceSwapper] Mirror file too small, trying next …")
         except Exception as e:
             print(f"[FaceSwapper] Mirror failed ({e})")
             INSWAPPER_PATH.unlink(missing_ok=True)
@@ -91,7 +92,6 @@ class FaceSwapper:
     def __init__(self):
         self._app = None        # InsightFace FaceAnalysis
         self._swapper = None    # inswapper ONNX model
-        self._enhancer = None   # GFPGAN (lazy)
         self._ready = False
 
     # ── Lazy initialisation ───────────────────────────────────────────────────
@@ -120,22 +120,48 @@ class FaceSwapper:
 
         self._ready = True
 
-    def _get_enhancer(self):
-        """Lazy-load GFPGAN enhancer."""
-        if self._enhancer is None:
-            from gfpgan import GFPGANer
+    # ── Enhancement (pure OpenCV, no extra models) ────────────────────────────
 
-            self._enhancer = GFPGANer(
-                model_path=(
-                    "https://github.com/TencentARC/GFPGAN/releases/download/"
-                    "v1.3.0/GFPGANv1.4.pth"
-                ),
-                upscale=1,
-                arch="clean",
-                channel_multiplier=2,
-                bg_upsampler=None,
+    @staticmethod
+    def _enhance_opencv(image: np.ndarray, faces) -> np.ndarray:
+        """
+        For each detected face bounding box:
+          1. Unsharp masking — recovers detail lost by inswapper's 128-px output
+          2. CLAHE on the L channel — local contrast without blowing highlights
+        """
+        result = image.copy()
+        for face in faces:
+            box = face.bbox.astype(int)
+            x1, y1, x2, y2 = (
+                max(box[0], 0), max(box[1], 0),
+                min(box[2], image.shape[1]), min(box[3], image.shape[0]),
             )
-        return self._enhancer
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            roi = result[y1:y2, x1:x2].copy()
+
+            # 1. Unsharp mask (amount=1.4, radius=3)
+            blurred = cv2.GaussianBlur(roi, (0, 0), 3)
+            sharp = cv2.addWeighted(roi, 2.4, blurred, -1.4, 0)
+
+            # 2. CLAHE on L channel
+            lab = cv2.cvtColor(sharp, cv2.COLOR_BGR2LAB)
+            clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(4, 4))
+            lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+            enhanced_roi = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+            # Feather-blend back so edges stay smooth
+            mask = np.zeros(roi.shape[:2], dtype=np.float32)
+            pad = max(4, (y2 - y1) // 10)
+            mask[pad:-pad, pad:-pad] = 1.0
+            mask = cv2.GaussianBlur(mask, (0, 0), pad // 2 or 1)
+            mask_3ch = mask[:, :, np.newaxis]
+            result[y1:y2, x1:x2] = (
+                enhanced_roi * mask_3ch + roi * (1 - mask_3ch)
+            ).astype(np.uint8)
+
+        return result
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -143,8 +169,8 @@ class FaceSwapper:
         self,
         source_bgr: np.ndarray,
         target_bgr: np.ndarray,
-        enhance: bool = False,
-    ) -> tuple[np.ndarray | None, str]:
+        enhance: bool = True,
+    ):
         """
         Swap the first detected face in *source_bgr* onto every face in
         *target_bgr*.
@@ -155,6 +181,13 @@ class FaceSwapper:
         self._init()
 
         try:
+            # Resize to optimal resolution (too large = slow; too small = blurry)
+            MAX_DIM = 1280
+            h, w = target_bgr.shape[:2]
+            if max(h, w) > MAX_DIM:
+                scale = MAX_DIM / max(h, w)
+                target_bgr = cv2.resize(target_bgr, (int(w * scale), int(h * scale)))
+
             source_faces = self._app.get(source_bgr)
             target_faces = self._app.get(target_bgr)
 
@@ -171,16 +204,9 @@ class FaceSwapper:
                     result, tgt_face, source_face, paste_back=True
                 )
 
+            # Always apply OpenCV enhancement — no extra deps needed
             if enhance:
-                try:
-                    _, _, result = self._get_enhancer().enhance(
-                        result,
-                        has_aligned=False,
-                        only_center_face=False,
-                        paste_back=True,
-                    )
-                except Exception as e:
-                    print(f"[FaceSwapper] Enhancement skipped: {e}")
+                result = self._enhance_opencv(result, target_faces)
 
             return result, f"Swapped {len(target_faces)} face(s) successfully."
 
