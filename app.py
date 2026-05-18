@@ -175,8 +175,8 @@ with gr.Blocks(title="Face & Body Swapper", theme=gr.themes.Soft()) as demo:
                     fv_source = gr.Image(label="Source Face Image", type="pil")
                     fv_target = gr.Video(label="Target Video")
                     fv_enhance = gr.Checkbox(
-                        label="Enhance faces (sharpening + contrast)",
-                        value=True,
+                        label="Enhance faces (sharpening + contrast) — adds time per frame",
+                        value=False,
                     )
                     fv_fast = gr.Checkbox(
                         label="⚡ Fast Mode — skip every other frame (~2× speed, slight motion blur)",

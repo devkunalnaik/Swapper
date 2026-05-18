@@ -466,7 +466,10 @@ class FaceSwapper:
             result = self._swapper.get(result, tgt_face, source_face, paste_back=True)
 
         if enhance:
-            result = self._enhance_codeformer(result, target_faces)
+            # Use OpenCV enhancement for video — CodeFormer causes per-frame
+            # temporal flicker (each frame independently restored = jitter).
+            # OpenCV unsharp+CLAHE is temporally stable and fast.
+            result = self._enhance_opencv(result, target_faces)
 
         # Scale back up to original frame size
         if scale_down < 1.0:

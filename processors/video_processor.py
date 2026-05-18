@@ -106,14 +106,17 @@ class VideoProcessor:
 
         # Use AVI + XVID for the intermediate file — far more reliable than
         # mp4v on Linux (HF Spaces).  FFmpeg converts it to H.264/mp4 after.
+        # XVID/MJPG require even dimensions — round down if necessary.
+        enc_w = width  - (width  % 2)
+        enc_h = height - (height % 2)
         raw_out_path = tempfile.mktemp(suffix="_raw.avi")
         fourcc       = cv2.VideoWriter_fourcc(*"XVID")
-        writer       = cv2.VideoWriter(raw_out_path, fourcc, fps, (width, height))
+        writer       = cv2.VideoWriter(raw_out_path, fourcc, fps, (enc_w, enc_h))
         if not writer.isOpened():
             # XVID not available — fall back to MJPG
             raw_out_path = tempfile.mktemp(suffix="_raw.avi")
             fourcc  = cv2.VideoWriter_fourcc(*"MJPG")
-            writer  = cv2.VideoWriter(raw_out_path, fourcc, fps, (width, height))
+            writer  = cv2.VideoWriter(raw_out_path, fourcc, fps, (enc_w, enc_h))
 
         frame_idx        = start_frame   # absolute frame number in the source video
         processed        = 0
@@ -155,12 +158,19 @@ class VideoProcessor:
                     cached_tgt_faces = new_faces if new_faces else cached_tgt_faces
 
                 if result_frame is not None:
+                    # Ensure frame matches writer dimensions (even crop if needed)
+                    rf_h, rf_w = result_frame.shape[:2]
+                    if rf_w != enc_w or rf_h != enc_h:
+                        result_frame = cv2.resize(result_frame, (enc_w, enc_h), interpolation=cv2.INTER_LINEAR)
                     writer.write(result_frame)
                     last_result = result_frame
                     processed += 1
                 else:
-                    writer.write(frame)
-                    last_result = frame
+                    frm = frame[:enc_h, :enc_w] if (frame.shape[1] > enc_w or frame.shape[0] > enc_h) else frame
+                    if frm.shape[1] != enc_w or frm.shape[0] != enc_h:
+                        frm = cv2.resize(frm, (enc_w, enc_h), interpolation=cv2.INTER_LINEAR)
+                    writer.write(frm)
+                    last_result = frm
                     errors += 1
 
                 frame_idx += 1
@@ -265,10 +275,10 @@ class VideoProcessor:
 
             out_kwargs = dict(
                 vcodec="libx264",
-                crf=18,              # 18 = visually lossless (was 23)
+                crf=18,
                 preset="fast",
-                pix_fmt="yuv420p",   # widest player compatibility
-                **{"vf": "unsharp=5:5:1.0:5:5:0.0"},  # mild luma sharpening
+                pix_fmt="yuv420p",
+                **{"vf": "unsharp=3:3:0.3:3:3:0.0"},  # subtle luma sharpening, no ringing
             )
             if has_audio:
                 out_kwargs.update(acodec="aac", audio_bitrate="192k")
