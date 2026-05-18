@@ -7,6 +7,7 @@ in the local `models/` directory.
 """
 
 import os
+import shutil
 import cv2
 import numpy as np
 import requests
@@ -17,24 +18,66 @@ MODELS_DIR = Path(__file__).parent.parent / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 
 INSWAPPER_PATH = MODELS_DIR / "inswapper_128.onnx"
-INSWAPPER_URL = (
-    "https://huggingface.co/deepinsight/inswapper/resolve/main/inswapper_128.onnx"
-)
+
+# Public mirrors — tried in order until one succeeds
+_INSWAPPER_URLS = [
+    # Public HF mirror (no auth required)
+    "https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx",
+    # Fallback mirror
+    "https://huggingface.co/theNeofr/inswapper/resolve/main/inswapper_128.onnx",
+]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _download_file(url: str, dest: Path) -> None:
-    """Stream-download a file, showing a simple progress indicator."""
-    if dest.exists():
+def _download_inswapper() -> None:
+    """Download inswapper_128.onnx.
+
+    Strategy:
+    1. huggingface_hub.hf_hub_download (uses HF_TOKEN env var automatically
+       on HF Spaces — works if user has accepted gated-model terms).
+    2. Plain HTTP fallback from public mirrors.
+    """
+    if INSWAPPER_PATH.exists() and INSWAPPER_PATH.stat().st_size > 100_000:
         return
-    print(f"[FaceSwapper] Downloading {dest.name} …")
-    response = requests.get(url, stream=True, timeout=120)
-    response.raise_for_status()
-    with open(dest, "wb") as f:
-        for chunk in response.iter_content(chunk_size=65536):
-            f.write(chunk)
-    print(f"[FaceSwapper] Saved to {dest}")
+
+    # ── Strategy 1: huggingface_hub ──────────────────────────────────────────
+    try:
+        from huggingface_hub import hf_hub_download
+        print("[FaceSwapper] Downloading inswapper_128.onnx via HF Hub …")
+        cached = hf_hub_download(
+            repo_id="deepinsight/inswapper",
+            filename="inswapper_128.onnx",
+            token=os.environ.get("HF_TOKEN"),
+        )
+        shutil.copy(cached, INSWAPPER_PATH)
+        print(f"[FaceSwapper] Saved to {INSWAPPER_PATH}")
+        return
+    except Exception as e:
+        print(f"[FaceSwapper] HF Hub download failed ({e}), trying mirrors …")
+
+    # ── Strategy 2: public mirrors ───────────────────────────────────────────
+    for url in _INSWAPPER_URLS:
+        try:
+            print(f"[FaceSwapper] Trying {url} …")
+            resp = requests.get(url, stream=True, timeout=180)
+            resp.raise_for_status()
+            with open(INSWAPPER_PATH, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=65536):
+                    f.write(chunk)
+            if INSWAPPER_PATH.stat().st_size > 100_000:
+                print(f"[FaceSwapper] Saved to {INSWAPPER_PATH}")
+                return
+            INSWAPPER_PATH.unlink(missing_ok=True)
+        except Exception as e:
+            print(f"[FaceSwapper] Mirror failed ({e})")
+            INSWAPPER_PATH.unlink(missing_ok=True)
+
+    raise RuntimeError(
+        "Could not download inswapper_128.onnx. "
+        "Accept the model terms at https://huggingface.co/deepinsight/inswapper "
+        "then add your HF token as a Space secret named HF_TOKEN."
+    )
 
 
 # ── Main class ────────────────────────────────────────────────────────────────
@@ -69,7 +112,7 @@ class FaceSwapper:
         self._app.prepare(ctx_id=-1, det_size=(640, 640))
 
         # inswapper model
-        _download_file(INSWAPPER_URL, INSWAPPER_PATH)
+        _download_inswapper()
         self._swapper = insightface.model_zoo.get_model(
             str(INSWAPPER_PATH),
             providers=["CPUExecutionProvider"],
