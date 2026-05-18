@@ -384,9 +384,11 @@ class FaceSwapper:
         """
         A = swapped.astype(np.float32)
         B = original.astype(np.float32)
-        M = (mask.astype(np.float32) / 255.0)
+        M = mask.astype(np.float32) / 255.0
         if M.ndim == 2:
             M = M[:, :, np.newaxis]
+        # Expand to 3 channels so pyrDown/pyrUp never collapse the channel dim
+        M = np.repeat(M, 3, axis=2)
 
         # Build Gaussian pyramids
         gA, gB, gM = [A], [B], [M]
