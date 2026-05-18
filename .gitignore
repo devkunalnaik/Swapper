@@ -1,0 +1,42 @@
+# Models (large binary files — download at runtime)
+models/*.onnx
+models/*.pth
+models/*.pt
+models/*.bin
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env
+
+# Secrets / environment variables
+.env
+.env.*
+*.key
+
+# Temp / output files
+*.tmp
+output/
+temp/
+tmp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
