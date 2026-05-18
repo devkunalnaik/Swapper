@@ -38,7 +38,7 @@ def _get_body_swapper():
 
 # ── Processing functions ─────────────────────────────────────────────────────
 
-def face_swap_image(source_img, target_img, enhance):
+def face_swap_image(source_img, target_img, enhance, progress=gr.Progress()):
     if source_img is None or target_img is None:
         return None, "Please upload both a source and a target image."
     try:
@@ -46,21 +46,24 @@ def face_swap_image(source_img, target_img, enhance):
             pil_to_bgr(source_img),
             pil_to_bgr(target_img),
             enhance=enhance,
+            progress_cb=lambda v, m: progress(v, desc=m),
         )
         return (bgr_to_pil(result) if result is not None else None), msg
     except Exception as e:
         return None, f"Error: {e}"
 
 
-def body_swap_image(source_img, target_img, blend_strength):
+def body_swap_image(source_img, target_img, blend_strength, progress=gr.Progress()):
     if source_img is None or target_img is None:
         return None, "Please upload both a source and a target image."
     try:
+        progress(0.05, desc="Loading segmentation model…")
         result, msg = _get_body_swapper().swap(
             pil_to_bgr(source_img),
             pil_to_bgr(target_img),
             blend_strength=blend_strength,
         )
+        progress(1.0, desc=msg)
         return (bgr_to_pil(result) if result is not None else None), msg
     except Exception as e:
         return None, f"Error: {e}"

@@ -346,6 +346,72 @@ class FaceSwapper:
 
         return result
 
+    # ── Laplacian pyramid blending ────────────────────────────────────────────
+
+    @staticmethod
+    def _face_ellipse_mask(shape: tuple, faces, expand: float = 0.35) -> np.ndarray:
+        """
+        Soft elliptical mask covering all detected face regions.
+        255 = use swapped face, 0 = use original background.
+        """
+        mask = np.zeros(shape[:2], dtype=np.uint8)
+        for face in faces:
+            box = face.bbox.astype(int)
+            x1 = max(box[0], 0);  y1 = max(box[1], 0)
+            x2 = min(box[2], shape[1]); y2 = min(box[3], shape[0])
+            w, h = x2 - x1, y2 - y1
+            if w <= 0 or h <= 0:
+                continue
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            ax = int(w // 2 * (1 + expand))
+            ay = int(h // 2 * (1 + expand))
+            cv2.ellipse(mask, (cx, cy), (ax, ay), 0, 0, 360, 255, -1)
+        # Heavy Gaussian feather — wide transition = no visible seam
+        blur = max(31, min(mask.shape[:2]) // 10)
+        if blur % 2 == 0:
+            blur += 1
+        return cv2.GaussianBlur(mask, (blur, blur), 0)
+
+    @staticmethod
+    def _laplacian_blend(swapped: np.ndarray, original: np.ndarray,
+                          mask: np.ndarray, levels: int = 6) -> np.ndarray:
+        """
+        Laplacian pyramid blending.
+        Blends swapped face region onto original at multiple spatial scales
+        so no hard edge is visible regardless of skin tone or lighting.
+
+        mask: uint8 single-channel, 255 = take from swapped, 0 = take from original.
+        """
+        A = swapped.astype(np.float32)
+        B = original.astype(np.float32)
+        M = (mask.astype(np.float32) / 255.0)
+        if M.ndim == 2:
+            M = M[:, :, np.newaxis]
+
+        # Build Gaussian pyramids
+        gA, gB, gM = [A], [B], [M]
+        for _ in range(levels):
+            gA.append(cv2.pyrDown(gA[-1]))
+            gB.append(cv2.pyrDown(gB[-1]))
+            gM.append(cv2.pyrDown(gM[-1]))
+
+        # Build Laplacian pyramids
+        lA, lB = [], []
+        for i in range(levels):
+            sz = (gA[i].shape[1], gA[i].shape[0])
+            lA.append(gA[i] - cv2.pyrUp(gA[i + 1], dstsize=sz))
+            lB.append(gB[i] - cv2.pyrUp(gB[i + 1], dstsize=sz))
+        lA.append(gA[levels])
+        lB.append(gB[levels])
+
+        # Blend each level, reconstruct coarse→fine
+        result = lA[levels] * gM[levels] + lB[levels] * (1.0 - gM[levels])
+        for i in range(levels - 1, -1, -1):
+            sz = (lA[i].shape[1], lA[i].shape[0])
+            result = cv2.pyrUp(result, dstsize=sz) + lA[i] * gM[i] + lB[i] * (1.0 - gM[i])
+
+        return np.clip(result, 0, 255).astype(np.uint8)
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def swap(
@@ -353,19 +419,25 @@ class FaceSwapper:
         source_bgr: np.ndarray,
         target_bgr: np.ndarray,
         enhance: bool = True,
+        progress_cb=None,
     ):
         """
         Swap the first detected face in *source_bgr* onto every face in
-        *target_bgr*.
+        *target_bgr*.  Applies Laplacian pyramid blending for seamless edges.
+
+        progress_cb: optional callable(fraction: float, label: str)
 
         Returns:
             (result_bgr, status_message)
         """
+        def _p(v, msg):
+            if progress_cb:
+                progress_cb(v, msg)
+
         self._init()
+        _p(0.1, "Models ready — detecting faces…")
 
         try:
-            # Preserve full resolution up to 2048px on the longest side.
-            # Going beyond that adds little visible quality on CPU but multiplies time.
             MAX_DIM = 2048
             orig_h, orig_w = target_bgr.shape[:2]
             scale_down = 1.0
@@ -378,6 +450,7 @@ class FaceSwapper:
                 )
 
             source_faces = self._app.get(source_bgr)
+            _p(0.3, "Source face detected — scanning target…")
             target_faces = self._app.get(target_bgr)
 
             if not source_faces:
@@ -385,26 +458,36 @@ class FaceSwapper:
             if not target_faces:
                 return None, "No face detected in target image."
 
-            source_face = source_faces[0]
-            result = target_bgr.copy()
+            _p(0.45, f"Swapping {len(target_faces)} face(s)…")
+            source_face  = source_faces[0]
+            result       = target_bgr.copy()
+            original_bgr = target_bgr.copy()   # kept for Laplacian blend
 
             for tgt_face in target_faces:
                 result = self._swapper.get(
                     result, tgt_face, source_face, paste_back=True
                 )
 
-            # CodeFormer ONNX + ESPCN super-res + CLAHE (falls back to OpenCV if unavailable)
+            # ── Laplacian pyramid blending — removes hard boundary ─────────
+            _p(0.65, "Blending edges (Laplacian pyramid)…")
+            blend_mask = self._face_ellipse_mask(original_bgr.shape, target_faces)
+            result     = self._laplacian_blend(result, original_bgr, blend_mask)
+
+            # ── CodeFormer enhancement (images only) ──────────────────────
             if enhance:
+                _p(0.80, "Enhancing quality (CodeFormer)…")
                 result = self._enhance_codeformer(result, target_faces)
 
-            # If we downscaled, upscale back to original resolution with Lanczos
+            # ── Upscale back to original resolution ───────────────────────
             if scale_down < 1.0:
+                _p(0.95, "Upscaling to original resolution…")
                 result = cv2.resize(
                     result,
                     (orig_w, orig_h),
                     interpolation=cv2.INTER_LANCZOS4,
                 )
 
+            _p(1.0, f"Done — {len(target_faces)} face(s) swapped.")
             return result, f"Swapped {len(target_faces)} face(s) successfully."
 
         except Exception as exc:
