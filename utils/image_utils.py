@@ -4,7 +4,8 @@ from PIL import Image
 
 
 def pil_to_bgr(pil_img: Image.Image) -> np.ndarray:
-    """Convert PIL RGB image to OpenCV BGR numpy array."""
+    """Convert PIL image to OpenCV BGR. Handles RGB, RGBA, palette, grayscale."""
+    pil_img = pil_img.convert("RGB")  # always normalise to 3-channel RGB
     return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
 

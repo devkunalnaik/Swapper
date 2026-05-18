@@ -41,25 +41,29 @@ def _get_body_swapper():
 def face_swap_image(source_img, target_img, enhance):
     if source_img is None or target_img is None:
         return None, "Please upload both a source and a target image."
-
-    result, msg = _get_face_swapper().swap(
-        pil_to_bgr(source_img),
-        pil_to_bgr(target_img),
-        enhance=enhance,
-    )
-    return (bgr_to_pil(result) if result is not None else None), msg
+    try:
+        result, msg = _get_face_swapper().swap(
+            pil_to_bgr(source_img),
+            pil_to_bgr(target_img),
+            enhance=enhance,
+        )
+        return (bgr_to_pil(result) if result is not None else None), msg
+    except Exception as e:
+        return None, f"Error: {e}"
 
 
 def body_swap_image(source_img, target_img, blend_strength):
     if source_img is None or target_img is None:
         return None, "Please upload both a source and a target image."
-
-    result, msg = _get_body_swapper().swap(
-        pil_to_bgr(source_img),
-        pil_to_bgr(target_img),
-        blend_strength=blend_strength,
-    )
-    return (bgr_to_pil(result) if result is not None else None), msg
+    try:
+        result, msg = _get_body_swapper().swap(
+            pil_to_bgr(source_img),
+            pil_to_bgr(target_img),
+            blend_strength=blend_strength,
+        )
+        return (bgr_to_pil(result) if result is not None else None), msg
+    except Exception as e:
+        return None, f"Error: {e}"
 
 
 def face_swap_video(source_img, target_video, enhance, progress=gr.Progress()):
