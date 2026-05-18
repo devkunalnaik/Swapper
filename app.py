@@ -12,7 +12,6 @@ Tabs
 import cv2
 import numpy as np
 import gradio as gr
-from PIL import Image
 
 from utils.image_utils import pil_to_bgr, bgr_to_pil
 
@@ -39,11 +38,7 @@ def _get_body_swapper():
 
 # ── Processing functions ─────────────────────────────────────────────────────
 
-def face_swap_image(
-    source_img: Image.Image,
-    target_img: Image.Image,
-    enhance: bool,
-) -> tuple[Image.Image | None, str]:
+def face_swap_image(source_img, target_img, enhance):
     if source_img is None or target_img is None:
         return None, "Please upload both a source and a target image."
 
@@ -55,11 +50,7 @@ def face_swap_image(
     return (bgr_to_pil(result) if result is not None else None), msg
 
 
-def body_swap_image(
-    source_img: Image.Image,
-    target_img: Image.Image,
-    blend_strength: float,
-) -> tuple[Image.Image | None, str]:
+def body_swap_image(source_img, target_img, blend_strength):
     if source_img is None or target_img is None:
         return None, "Please upload both a source and a target image."
 
@@ -71,12 +62,7 @@ def body_swap_image(
     return (bgr_to_pil(result) if result is not None else None), msg
 
 
-def face_swap_video(
-    source_img: Image.Image,
-    target_video: str,
-    enhance: bool,
-    progress=gr.Progress(),
-) -> tuple[str | None, str]:
+def face_swap_video(source_img, target_video, enhance, progress=gr.Progress()):
     if source_img is None or target_video is None:
         return None, "Please upload a source face image and a target video."
 
@@ -92,12 +78,7 @@ def face_swap_video(
     return output_path, msg
 
 
-def body_swap_video(
-    source_img: Image.Image,
-    target_video: str,
-    blend_strength: float,
-    progress=gr.Progress(),
-) -> tuple[str | None, str]:
+def body_swap_video(source_img, target_video, blend_strength, progress=gr.Progress()):
     if source_img is None or target_video is None:
         return None, "Please upload a source body image and a target video."
 
