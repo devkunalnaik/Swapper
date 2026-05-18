@@ -66,7 +66,7 @@ def body_swap_image(source_img, target_img, blend_strength):
         return None, f"Error: {e}"
 
 
-def face_swap_video(source_img, target_video, enhance, progress=gr.Progress()):
+def face_swap_video(source_img, target_video, enhance, fast_mode, progress=gr.Progress()):
     if source_img is None or target_video is None:
         return None, "Please upload a source face image and a target video."
 
@@ -77,12 +77,13 @@ def face_swap_video(source_img, target_video, enhance, progress=gr.Progress()):
         target_video,
         mode="face",
         enhance=enhance,
+        fast_mode=fast_mode,
         progress=progress,
     )
     return output_path, msg
 
 
-def body_swap_video(source_img, target_video, blend_strength, progress=gr.Progress()):
+def body_swap_video(source_img, target_video, blend_strength, fast_mode, progress=gr.Progress()):
     if source_img is None or target_video is None:
         return None, "Please upload a source body image and a target video."
 
@@ -93,6 +94,7 @@ def body_swap_video(source_img, target_video, blend_strength, progress=gr.Progre
         target_video,
         mode="body",
         blend_strength=blend_strength,
+        fast_mode=fast_mode,
         progress=progress,
     )
     return output_path, msg
@@ -174,6 +176,10 @@ with gr.Blocks(title="Face & Body Swapper", theme=gr.themes.Soft()) as demo:
                         label="Enhance faces (sharpening + contrast)",
                         value=True,
                     )
+                    fv_fast = gr.Checkbox(
+                        label="⚡ Fast Mode — skip every other frame (~2× speed, slight motion blur)",
+                        value=False,
+                    )
                     fv_btn = gr.Button("Swap Faces in Video", variant="primary")
                 with gr.Column(scale=1):
                     fv_output = gr.Video(label="Result Video")
@@ -181,7 +187,7 @@ with gr.Blocks(title="Face & Body Swapper", theme=gr.themes.Soft()) as demo:
 
             fv_btn.click(
                 face_swap_video,
-                inputs=[fv_source, fv_target, fv_enhance],
+                inputs=[fv_source, fv_target, fv_enhance, fv_fast],
                 outputs=[fv_output, fv_status],
             )
 
@@ -199,6 +205,10 @@ with gr.Blocks(title="Face & Body Swapper", theme=gr.themes.Soft()) as demo:
                         minimum=0.1, maximum=1.0, value=0.85, step=0.05,
                         label="Blend Strength",
                     )
+                    bv_fast = gr.Checkbox(
+                        label="⚡ Fast Mode — skip every other frame (~2× speed)",
+                        value=False,
+                    )
                     bv_btn = gr.Button("Swap Body in Video", variant="primary")
                 with gr.Column(scale=1):
                     bv_output = gr.Video(label="Result Video")
@@ -206,7 +216,7 @@ with gr.Blocks(title="Face & Body Swapper", theme=gr.themes.Soft()) as demo:
 
             bv_btn.click(
                 body_swap_video,
-                inputs=[bv_source, bv_target, bv_blend],
+                inputs=[bv_source, bv_target, bv_blend, bv_fast],
                 outputs=[bv_output, bv_status],
             )
 

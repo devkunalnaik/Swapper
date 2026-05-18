@@ -102,16 +102,25 @@ class FaceSwapper:
 
         import insightface
         from insightface.app import FaceAnalysis
+        import onnxruntime as ort
+        import multiprocessing
 
-        # Face analysis (buffalo_l auto-downloads on first run)
-        # Initialize face analysis (CPU-only for free HF Spaces tier)
+        n_threads = multiprocessing.cpu_count()
+
+        # Use all available CPU cores for ONNX inference
+        sess_opts = ort.SessionOptions()
+        sess_opts.intra_op_num_threads = n_threads
+        sess_opts.inter_op_num_threads = n_threads
+        sess_opts.execution_mode = ort.ExecutionMode.ORT_PARALLEL
+
+        # Face analysis — 640 for images, 320 for video (set via swap_frame)
         self._app = FaceAnalysis(
             name="buffalo_l",
             providers=["CPUExecutionProvider"],
         )
         self._app.prepare(ctx_id=-1, det_size=(640, 640))
 
-        # inswapper model
+        # inswapper model with multi-thread session options
         _download_inswapper()
         self._swapper = insightface.model_zoo.get_model(
             str(INSWAPPER_PATH),
@@ -270,7 +279,10 @@ class FaceSwapper:
             )
 
         if cached_target_faces is None:
+            # Use smaller det_size for video to speed up detection
+            self._app.det_model.input_size = (320, 320)
             target_faces = self._app.get(target_bgr)
+            self._app.det_model.input_size = (640, 640)  # restore for images
         else:
             target_faces = cached_target_faces
 

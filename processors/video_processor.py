@@ -40,6 +40,7 @@ class VideoProcessor:
         mode: str = "face",          # "face" | "body"
         enhance: bool = False,
         blend_strength: float = 0.85,
+        fast_mode: bool = False,     # skip every other frame (~2x speed)
         progress=None,
     ) -> tuple[str | None, str]:
         """
@@ -82,6 +83,7 @@ class VideoProcessor:
         processed        = 0
         errors           = 0
         cached_tgt_faces = None   # reused across DET_INTERVAL frames
+        last_result      = None   # for fast_mode frame duplication
 
         while True:
             ret, frame = cap.read()
@@ -93,6 +95,12 @@ class VideoProcessor:
                     frame_idx / total_frames,
                     f"Processing frame {frame_idx + 1} / {total_frames}",
                 )
+
+            # Fast mode: skip odd frames — duplicate the previous processed result
+            if fast_mode and frame_idx % 2 == 1 and last_result is not None:
+                writer.write(last_result)
+                frame_idx += 1
+                continue
 
             # Only re-detect target faces every DET_INTERVAL frames
             use_cache = (mode == "face") and (frame_idx % DET_INTERVAL != 0) and (cached_tgt_faces is not None)
@@ -109,9 +117,11 @@ class VideoProcessor:
 
             if result_frame is not None:
                 writer.write(result_frame)
+                last_result = result_frame
                 processed += 1
             else:
                 writer.write(frame)  # keep original on failure
+                last_result = frame
                 errors += 1
 
             frame_idx += 1
