@@ -12,7 +12,7 @@ import tempfile
 import numpy as np
 from pathlib import Path
 
-MAX_FRAMES = 300  # ~10 s at 30 fps — raise for paid tiers
+MAX_FRAMES = 600  # ~20 s at 30 fps — raise for paid/GPU tiers
 
 
 class VideoProcessor:

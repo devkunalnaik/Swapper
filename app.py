@@ -160,7 +160,7 @@ with gr.Blocks(title="Face & Body Swapper", theme=gr.themes.Soft()) as demo:
         with gr.Tab("Face Swap · Video"):
             gr.Markdown(
                 "Applies face swap to every frame of the **target** video.  "
-                "Max video length: **300 frames** (~10 s at 30 fps)."
+                "Max video length: **600 frames** (~20 s at 30 fps)."
             )
             with gr.Row():
                 with gr.Column(scale=1):
@@ -185,7 +185,7 @@ with gr.Blocks(title="Face & Body Swapper", theme=gr.themes.Soft()) as demo:
         with gr.Tab("Body Swap · Video"):
             gr.Markdown(
                 "Applies body swap to every frame of the **target** video.  "
-                "Max video length: **300 frames** (~10 s at 30 fps)."
+                "Max video length: **600 frames** (~20 s at 30 fps)."
             )
             with gr.Row():
                 with gr.Column(scale=1):
