@@ -1,5 +1,5 @@
 """
-Face & Body Swapper — Gradio app for Hugging Face Spaces (ZeroGPU).
+Face & Body Swapper — Gradio app for Hugging Face Spaces (CPU).
 
 Tabs
 ----
@@ -12,7 +12,6 @@ Tabs
 import cv2
 import numpy as np
 import gradio as gr
-import spaces
 from PIL import Image
 
 from utils.image_utils import pil_to_bgr, bgr_to_pil
@@ -38,9 +37,8 @@ def _get_body_swapper():
     return _body_swapper
 
 
-# ── Processing functions (each decorated for ZeroGPU) ────────────────────────
+# ── Processing functions ─────────────────────────────────────────────────────
 
-@spaces.GPU()
 def face_swap_image(
     source_img: Image.Image,
     target_img: Image.Image,
@@ -57,7 +55,6 @@ def face_swap_image(
     return (bgr_to_pil(result) if result is not None else None), msg
 
 
-@spaces.GPU()
 def body_swap_image(
     source_img: Image.Image,
     target_img: Image.Image,
@@ -74,7 +71,6 @@ def body_swap_image(
     return (bgr_to_pil(result) if result is not None else None), msg
 
 
-@spaces.GPU()
 def face_swap_video(
     source_img: Image.Image,
     target_video: str,
@@ -96,7 +92,6 @@ def face_swap_video(
     return output_path, msg
 
 
-@spaces.GPU()
 def body_swap_video(
     source_img: Image.Image,
     target_video: str,

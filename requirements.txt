@@ -1,6 +1,5 @@
-# Core UI & GPU
+# Core UI
 gradio>=4.44.0
-spaces>=0.19.0
 
 # Deep Learning
 torch>=2.1.0
