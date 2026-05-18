@@ -128,7 +128,7 @@ with gr.Blocks(title="Face & Body Swapper", theme=gr.themes.Soft()) as demo:
     with gr.Tabs():
 
         # ── Tab 1: Face Swap — Image ──────────────────────────────────────────
-        with gr.TabItem("Face Swap · Image"):
+        with gr.Tab("Face Swap · Image"):
             gr.Markdown(
                 "The **source** face is placed onto every detected face in the **target** image."
             )
@@ -152,7 +152,7 @@ with gr.Blocks(title="Face & Body Swapper", theme=gr.themes.Soft()) as demo:
             )
 
         # ── Tab 2: Body Swap — Image ──────────────────────────────────────────
-        with gr.TabItem("Body Swap · Image"):
+        with gr.Tab("Body Swap · Image"):
             gr.Markdown(
                 "The **source** person's body is transplanted into the **target** scene."
             )
@@ -176,7 +176,7 @@ with gr.Blocks(title="Face & Body Swapper", theme=gr.themes.Soft()) as demo:
             )
 
         # ── Tab 3: Face Swap — Video ──────────────────────────────────────────
-        with gr.TabItem("Face Swap · Video"):
+        with gr.Tab("Face Swap · Video"):
             gr.Markdown(
                 "Applies face swap to every frame of the **target** video.  "
                 "Max video length: **300 frames** (~10 s at 30 fps)."
@@ -201,7 +201,7 @@ with gr.Blocks(title="Face & Body Swapper", theme=gr.themes.Soft()) as demo:
             )
 
         # ── Tab 4: Body Swap — Video ──────────────────────────────────────────
-        with gr.TabItem("Body Swap · Video"):
+        with gr.Tab("Body Swap · Video"):
             gr.Markdown(
                 "Applies body swap to every frame of the **target** video.  "
                 "Max video length: **300 frames** (~10 s at 30 fps)."

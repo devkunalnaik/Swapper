@@ -1,5 +1,5 @@
 # Core UI
-gradio==4.44.0
+gradio>=5.9.0
 
 # Deep Learning
 torch>=2.1.0
