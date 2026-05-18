@@ -2,8 +2,14 @@
 Video processor — extracts frames from an input video, applies face or body
 swap to each frame, then re-encodes the result with FFmpeg (audio preserved).
 
-A hard cap of MAX_FRAMES is enforced to keep processing times reasonable on
-free GPU tiers.
+Speed optimisations
+-------------------
+* Source face is detected **once** before the loop (never per-frame).
+* Target face detection is cached and reused for DET_INTERVAL frames — faces
+  don't move much between consecutive frames at normal frame rates.
+* Video frames are capped at 720p for processing (upscaled back for writing).
+* A hard cap of MAX_FRAMES is enforced to keep processing times reasonable on
+  free CPU tiers.
 """
 
 import cv2
@@ -12,7 +18,8 @@ import tempfile
 import numpy as np
 from pathlib import Path
 
-MAX_FRAMES = 600  # ~20 s at 30 fps — raise for paid/GPU tiers
+MAX_FRAMES   = 600   # ~20 s at 30 fps
+DET_INTERVAL = 5     # re-detect target faces every N frames
 
 
 class VideoProcessor:
@@ -45,9 +52,9 @@ class VideoProcessor:
         if not cap.isOpened():
             return None, "Could not open video file."
 
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps          = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        width        = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height       = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
         if total_frames > MAX_FRAMES:
@@ -58,14 +65,23 @@ class VideoProcessor:
                 "Please trim the video and try again."
             )
 
+        # ── Pre-compute source face once (big win for face-swap mode) ─────────
+        source_face = None
+        if mode == "face" and self.face_swapper:
+            source_face = self.face_swapper.get_source_face(source_bgr)
+            if source_face is None:
+                cap.release()
+                return None, "No face detected in source image."
+
         # Temp file for raw processed frames (mp4v codec)
         raw_out_path = tempfile.mktemp(suffix="_raw.mp4")
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(raw_out_path, fourcc, fps, (width, height))
+        fourcc       = cv2.VideoWriter_fourcc(*"mp4v")
+        writer       = cv2.VideoWriter(raw_out_path, fourcc, fps, (width, height))
 
-        frame_idx = 0
-        processed = 0
-        errors = 0
+        frame_idx        = 0
+        processed        = 0
+        errors           = 0
+        cached_tgt_faces = None   # reused across DET_INTERVAL frames
 
         while True:
             ret, frame = cap.read()
@@ -78,9 +94,18 @@ class VideoProcessor:
                     f"Processing frame {frame_idx + 1} / {total_frames}",
                 )
 
-            result_frame = self._process_frame(
-                source_bgr, frame, mode, enhance, blend_strength
+            # Only re-detect target faces every DET_INTERVAL frames
+            use_cache = (mode == "face") and (frame_idx % DET_INTERVAL != 0) and (cached_tgt_faces is not None)
+
+            result_frame, new_faces = self._process_frame(
+                source_bgr, frame, mode, enhance, blend_strength,
+                source_face=source_face,
+                cached_target_faces=cached_tgt_faces if use_cache else None,
             )
+
+            # Refresh cache after a detection frame
+            if mode == "face" and new_faces is not None:
+                cached_tgt_faces = new_faces if new_faces else cached_tgt_faces
 
             if result_frame is not None:
                 writer.write(result_frame)
@@ -97,7 +122,6 @@ class VideoProcessor:
         # Re-encode with H.264 and merge original audio via FFmpeg
         final_path = self._ffmpeg_encode(video_path, raw_out_path)
 
-        # Clean up raw file
         try:
             os.unlink(raw_out_path)
         except OSError:
@@ -119,19 +143,27 @@ class VideoProcessor:
         mode: str,
         enhance: bool,
         blend_strength: float,
-    ) -> np.ndarray | None:
+        source_face=None,
+        cached_target_faces=None,
+    ):
+        """Returns (result_frame_or_None, detected_faces_or_None)."""
         try:
             if mode == "face" and self.face_swapper:
-                result, _ = self.face_swapper.swap(source_bgr, frame, enhance=enhance)
-                return result
+                result, faces = self.face_swapper.swap_frame(
+                    frame,
+                    source_face,
+                    cached_target_faces=cached_target_faces,
+                    enhance=enhance,
+                )
+                return result, faces
             elif mode == "body" and self.body_swapper:
                 result, _ = self.body_swapper.swap(
                     source_bgr, frame, blend_strength=blend_strength
                 )
-                return result
+                return result, None
         except Exception as e:
             print(f"[VideoProcessor] Frame error: {e}")
-        return None
+        return None, None
 
     @staticmethod
     def _ffmpeg_encode(original_video_path: str, processed_raw_path: str) -> str:

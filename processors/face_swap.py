@@ -228,3 +228,64 @@ class FaceSwapper:
 
         except Exception as exc:
             return None, f"Face swap error: {exc}"
+
+    def get_source_face(self, source_bgr: np.ndarray):
+        """
+        Detect and return the first face in *source_bgr*.
+        Call once before a video loop and reuse the result in swap_frame().
+
+        Returns:
+            face object or None
+        """
+        self._init()
+        faces = self._app.get(source_bgr)
+        return faces[0] if faces else None
+
+    def swap_frame(
+        self,
+        target_bgr: np.ndarray,
+        source_face,
+        cached_target_faces=None,
+        enhance: bool = False,
+    ):
+        """
+        Fast path for video — reuses a pre-computed source_face and optionally
+        cached target faces (re-detection skipped when supplied).
+
+        Returns:
+            (result_bgr, target_faces_used)
+        """
+        self._init()
+
+        # Cap video frames at 720p for speed; quality still good for motion
+        MAX_VIDEO_DIM = 720
+        orig_h, orig_w = target_bgr.shape[:2]
+        scale_down = 1.0
+        if max(orig_h, orig_w) > MAX_VIDEO_DIM:
+            scale_down = MAX_VIDEO_DIM / max(orig_h, orig_w)
+            target_bgr = cv2.resize(
+                target_bgr,
+                (int(orig_w * scale_down), int(orig_h * scale_down)),
+                interpolation=cv2.INTER_LINEAR,
+            )
+
+        if cached_target_faces is None:
+            target_faces = self._app.get(target_bgr)
+        else:
+            target_faces = cached_target_faces
+
+        if not target_faces:
+            return None, []
+
+        result = target_bgr.copy()
+        for tgt_face in target_faces:
+            result = self._swapper.get(result, tgt_face, source_face, paste_back=True)
+
+        if enhance:
+            result = self._enhance_opencv(result, target_faces)
+
+        # Scale back up to original frame size
+        if scale_down < 1.0:
+            result = cv2.resize(result, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+
+        return result, target_faces
