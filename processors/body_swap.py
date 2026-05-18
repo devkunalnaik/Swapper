@@ -31,16 +31,27 @@ class BodySwapper:
     Replaces the body in *target_bgr* with the body from *source_bgr*.
     """
 
-    # ── Private helpers ───────────────────────────────────────────────────────
+    _rembg_session = None   # shared across instances; loaded once
 
-    @staticmethod
-    def _segment(bgr: np.ndarray) -> np.ndarray:
-        """Return uint8 single-channel person mask via rembg (U²-Net)."""
+    @classmethod
+    def _get_session(cls):
+        """Lazy-load the u2net_human_seg rembg session (better than general u2net)."""
+        if cls._rembg_session is None:
+            from rembg import new_session
+            print("[BodySwapper] Loading u2net_human_seg segmentation model …")
+            cls._rembg_session = new_session("u2net_human_seg")
+        return cls._rembg_session
+
+    # ── Private helpers ─────────────────────────────────────────────────
+
+    @classmethod
+    def _segment(cls, bgr: np.ndarray) -> np.ndarray:
+        """Return uint8 single-channel person mask via rembg u2net_human_seg."""
         from rembg import remove
 
-        pil = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-        result = remove(pil, only_mask=True)
-        mask = np.array(result)
+        pil    = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+        result = remove(pil, only_mask=True, session=cls._get_session())
+        mask   = np.array(result)
         if mask.ndim == 3:
             mask = mask[:, :, 0]
         return mask
@@ -147,12 +158,11 @@ class BodySwapper:
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _segment(self, bgr: np.ndarray) -> np.ndarray:
-        """Return a uint8 single-channel person mask via rembg."""
+        """Return a uint8 single-channel person mask via rembg u2net_human_seg."""
         from rembg import remove
-
-        pil = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-        result = remove(pil, only_mask=True)
-        mask = np.array(result)
+        pil    = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+        result = remove(pil, only_mask=True, session=self._get_session())
+        mask   = np.array(result)
         if mask.ndim == 3:
             mask = mask[:, :, 0]
         return mask

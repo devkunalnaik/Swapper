@@ -265,9 +265,10 @@ class VideoProcessor:
 
             out_kwargs = dict(
                 vcodec="libx264",
-                crf=23,
+                crf=18,              # 18 = visually lossless (was 23)
                 preset="fast",
                 pix_fmt="yuv420p",   # widest player compatibility
+                **{"vf": "unsharp=5:5:1.0:5:5:0.0"},  # mild luma sharpening
             )
             if has_audio:
                 out_kwargs.update(acodec="aac", audio_bitrate="192k")

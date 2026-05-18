@@ -18,7 +18,7 @@ rembg>=2.0.50
 # Pose Estimation — removed (mediapipe 0.10.14+ drops solutions API on Py3.13)
 
 # Image / Video Processing
-opencv-python-headless>=4.8.0
+opencv-contrib-python-headless>=4.8.0
 Pillow>=10.0.0
 numpy>=1.24.0
 scikit-image>=0.21.0

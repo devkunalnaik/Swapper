@@ -17,7 +17,9 @@ from pathlib import Path
 MODELS_DIR = Path(__file__).parent.parent / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 
-INSWAPPER_PATH = MODELS_DIR / "inswapper_128.onnx"
+INSWAPPER_PATH  = MODELS_DIR / "inswapper_128.onnx"
+CODEFORMER_PATH = MODELS_DIR / "codeformer.onnx"
+ESPCN_PATH      = MODELS_DIR / "ESPCN_x2.pb"
 
 # Public mirrors — tried in order until one succeeds
 _INSWAPPER_URLS = [
@@ -81,18 +83,69 @@ def _download_inswapper() -> None:
     )
 
 
+def _download_codeformer() -> None:
+    """Download CodeFormer ONNX model (~56 MB)."""
+    if CODEFORMER_PATH.exists() and CODEFORMER_PATH.stat().st_size > 50_000_000:
+        return
+    urls = [
+        "https://github.com/facefusion/facefusion-assets/releases/download/models/codeformer.onnx",
+    ]
+    for url in urls:
+        try:
+            print(f"[FaceSwapper] Downloading CodeFormer from {url} …")
+            resp = requests.get(url, stream=True, timeout=300)
+            resp.raise_for_status()
+            with open(CODEFORMER_PATH, "wb") as f:
+                for chunk in resp.iter_content(65536):
+                    f.write(chunk)
+            if CODEFORMER_PATH.stat().st_size > 50_000_000:
+                print("[FaceSwapper] CodeFormer ready.")
+                return
+            CODEFORMER_PATH.unlink(missing_ok=True)
+        except Exception as e:
+            print(f"[FaceSwapper] CodeFormer download failed: {e}")
+            CODEFORMER_PATH.unlink(missing_ok=True)
+    print("[FaceSwapper] CodeFormer unavailable — falling back to OpenCV enhancement.")
+
+
+def _download_espcn() -> None:
+    """Download ESPCN x2 super-resolution model (~100 KB)."""
+    if ESPCN_PATH.exists() and ESPCN_PATH.stat().st_size > 50_000:
+        return
+    urls = [
+        "https://github.com/fannymonori/TF-ESPCN/raw/master/export/ESPCN_x2.pb",
+    ]
+    for url in urls:
+        try:
+            print(f"[FaceSwapper] Downloading ESPCN SR model from {url} …")
+            resp = requests.get(url, timeout=60)
+            resp.raise_for_status()
+            ESPCN_PATH.write_bytes(resp.content)
+            if ESPCN_PATH.stat().st_size > 50_000:
+                print("[FaceSwapper] ESPCN SR model ready.")
+                return
+            ESPCN_PATH.unlink(missing_ok=True)
+        except Exception as e:
+            print(f"[FaceSwapper] ESPCN download failed: {e}")
+            ESPCN_PATH.unlink(missing_ok=True)
+    print("[FaceSwapper] ESPCN unavailable — skipping super-resolution step.")
+
+
 # ── Main class ────────────────────────────────────────────────────────────────
 
 class FaceSwapper:
     """
     Swaps the dominant face from a source image onto every detected face in
-    the target image.  Optionally runs GFPGAN to restore/enhance face quality.
+    the target image.  Optionally runs CodeFormer (ONNX) + ESPCN super-res
+    for ultra-realistic high-definition output.
     """
 
     def __init__(self):
-        self._app = None        # InsightFace FaceAnalysis
-        self._swapper = None    # inswapper ONNX model
-        self._ready = False
+        self._app            = None   # InsightFace FaceAnalysis
+        self._swapper        = None   # inswapper ONNX model
+        self._codeformer     = None   # CodeFormer ONNX session
+        self._sr             = None   # ESPCN DNN super-res (opencv-contrib)
+        self._ready          = False
 
     # ── Lazy initialisation ───────────────────────────────────────────────────
 
@@ -174,6 +227,125 @@ class FaceSwapper:
 
         return result
 
+    # ── CodeFormer ONNX enhancement ───────────────────────────────────────────
+
+    def _load_codeformer(self):
+        """Lazy-load CodeFormer ONNX session. Returns None if unavailable."""
+        if self._codeformer is not None:
+            return self._codeformer
+        try:
+            _download_codeformer()
+            if not CODEFORMER_PATH.exists():
+                return None
+            import onnxruntime as ort
+            self._codeformer = ort.InferenceSession(
+                str(CODEFORMER_PATH),
+                providers=["CPUExecutionProvider"],
+            )
+            print("[FaceSwapper] CodeFormer ONNX loaded.")
+        except Exception as e:
+            print(f"[FaceSwapper] CodeFormer load failed: {e}")
+            self._codeformer = None
+        return self._codeformer
+
+    def _load_sr(self):
+        """Lazy-load ESPCN x2 DNN super-res (needs opencv-contrib). Returns None if unavailable."""
+        if self._sr is not None:
+            return self._sr
+        try:
+            _download_espcn()
+            if not ESPCN_PATH.exists():
+                return None
+            sr = cv2.dnn_superres.DnnSuperResImpl_create()
+            sr.readModel(str(ESPCN_PATH))
+            sr.setModel("espcn", 2)
+            self._sr = sr
+            print("[FaceSwapper] ESPCN 2× super-res loaded.")
+        except Exception as e:
+            print(f"[FaceSwapper] ESPCN load failed ({e}) — super-res disabled.")
+            self._sr = None
+        return self._sr
+
+    def _enhance_codeformer(self, image: np.ndarray, faces) -> np.ndarray:
+        """
+        For each detected face:
+          1. CodeFormer ONNX — neural face restoration at 512×512
+          2. ESPCN 2× super-res — upscales small faces for HD output
+          3. CLAHE — local contrast refinement
+        Falls back to OpenCV enhancement if CodeFormer is unavailable.
+        """
+        sess = self._load_codeformer()
+        if sess is None:
+            return self._enhance_opencv(image, faces)
+
+        sr   = self._load_sr()      # may be None — applied only when available
+        result = image.copy()
+        input_names = [i.name for i in sess.get_inputs()]
+
+        for face in faces:
+            box = face.bbox.astype(int)
+            # Expand bbox 20% for realistic context padding
+            bx1, by1, bx2, by2 = (
+                max(box[0], 0), max(box[1], 0),
+                min(box[2], image.shape[1]), min(box[3], image.shape[0]),
+            )
+            pad = int(min(bx2 - bx1, by2 - by1) * 0.15)
+            x1 = max(0, bx1 - pad);  y1 = max(0, by1 - pad)
+            x2 = min(image.shape[1], bx2 + pad); y2 = min(image.shape[0], by2 + pad)
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            roi  = result[y1:y2, x1:x2].copy()
+            orig = roi.copy()
+            h, w = roi.shape[:2]
+
+            # ── 1. CodeFormer: BGR→RGB, resize to 512, normalize [-1, 1] ─────
+            face_rgb  = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+            face_512  = cv2.resize(face_rgb, (512, 512), interpolation=cv2.INTER_LANCZOS4)
+            inp       = (face_512.astype(np.float32) / 127.5) - 1.0   # [-1, 1]
+            inp       = np.transpose(inp, (2, 0, 1))[np.newaxis]       # [1,3,512,512]
+
+            try:
+                out = sess.run(None, {input_names[0]: inp})[0]         # [1,3,512,512]
+            except Exception as e:
+                print(f"[FaceSwapper] CodeFormer inference failed: {e}")
+                continue
+
+            # Postprocess: [-1,1] → [0,255] → BGR
+            out_rgb = np.squeeze(out)                                  # [3,512,512]
+            out_rgb = np.transpose(out_rgb, (1, 2, 0))                 # [512,512,3]
+            out_rgb = ((out_rgb + 1.0) * 127.5).clip(0, 255).astype(np.uint8)
+            out_bgr = cv2.cvtColor(out_rgb, cv2.COLOR_RGB2BGR)
+
+            # ── 2. ESPCN 2× super-res on small faces (<= 128 px) ─────────────
+            if sr is not None and min(w, h) <= 128:
+                try:
+                    out_bgr = sr.upsample(out_bgr)
+                    # Resize back to face region size (x2 upsample → scale back down)
+                    out_bgr = cv2.resize(out_bgr, (w, h), interpolation=cv2.INTER_LANCZOS4)
+                except Exception:
+                    out_bgr = cv2.resize(out_bgr, (w, h), interpolation=cv2.INTER_LANCZOS4)
+            else:
+                out_bgr = cv2.resize(out_bgr, (w, h), interpolation=cv2.INTER_LANCZOS4)
+
+            # ── 3. CLAHE on L channel for final contrast refinement ───────────
+            lab   = cv2.cvtColor(out_bgr, cv2.COLOR_BGR2LAB)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+            out_bgr = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+            # ── 4. Feather-blend onto result ──────────────────────────────────
+            msk = np.zeros((h, w), dtype=np.float32)
+            p   = max(4, min(h, w) // 10)
+            msk[p:-p, p:-p] = 1.0
+            msk = cv2.GaussianBlur(msk, (0, 0), p // 2 or 1)
+            msk = msk[:, :, np.newaxis]
+            result[y1:y2, x1:x2] = (
+                out_bgr.astype(np.float32) * msk + orig.astype(np.float32) * (1 - msk)
+            ).astype(np.uint8)
+
+        return result
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def swap(
@@ -221,9 +393,9 @@ class FaceSwapper:
                     result, tgt_face, source_face, paste_back=True
                 )
 
-            # Always apply OpenCV enhancement — no extra deps needed
+            # CodeFormer ONNX + ESPCN super-res + CLAHE (falls back to OpenCV if unavailable)
             if enhance:
-                result = self._enhance_opencv(result, target_faces)
+                result = self._enhance_codeformer(result, target_faces)
 
             # If we downscaled, upscale back to original resolution with Lanczos
             if scale_down < 1.0:
@@ -294,7 +466,7 @@ class FaceSwapper:
             result = self._swapper.get(result, tgt_face, source_face, paste_back=True)
 
         if enhance:
-            result = self._enhance_opencv(result, target_faces)
+            result = self._enhance_codeformer(result, target_faces)
 
         # Scale back up to original frame size
         if scale_down < 1.0:
