@@ -72,7 +72,7 @@ class VideoProcessor:
             if not ret:
                 break
 
-            if progress and total_frames > 0:
+            if progress is not None and total_frames > 0:
                 progress(
                     frame_idx / total_frames,
                     f"Processing frame {frame_idx + 1} / {total_frames}",
