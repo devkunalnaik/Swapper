@@ -14,13 +14,13 @@ def bgr_to_pil(bgr_img: np.ndarray) -> Image.Image:
     return Image.fromarray(cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB))
 
 
-def resize_to_max(image: np.ndarray, max_size: int = 1280) -> np.ndarray:
+def resize_to_max(image: np.ndarray, max_size: int = 2048) -> np.ndarray:
     """Downscale image so its longest side does not exceed max_size."""
     h, w = image.shape[:2]
     if max(h, w) <= max_size:
         return image
     scale = max_size / max(h, w)
-    return cv2.resize(image, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    return cv2.resize(image, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_LANCZOS4)
 
 
 def apply_color_correction(source: np.ndarray, target: np.ndarray, mask: np.ndarray) -> np.ndarray:

@@ -141,13 +141,15 @@ class FaceSwapper:
 
             roi = result[y1:y2, x1:x2].copy()
 
-            # 1. Unsharp mask (amount=1.4, radius=3)
-            blurred = cv2.GaussianBlur(roi, (0, 0), 3)
-            sharp = cv2.addWeighted(roi, 2.4, blurred, -1.4, 0)
+            # 1. Unsharp mask — scale radius with face size for consistent sharpness
+            face_short = min(x2 - x1, y2 - y1)
+            sigma = max(1.5, face_short / 80)  # larger face → larger radius
+            blurred = cv2.GaussianBlur(roi, (0, 0), sigma)
+            sharp = cv2.addWeighted(roi, 1.8, blurred, -0.8, 0)
 
             # 2. CLAHE on L channel
             lab = cv2.cvtColor(sharp, cv2.COLOR_BGR2LAB)
-            clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(4, 4))
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             lab[:, :, 0] = clahe.apply(lab[:, :, 0])
             enhanced_roi = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
@@ -181,12 +183,18 @@ class FaceSwapper:
         self._init()
 
         try:
-            # Resize to optimal resolution (too large = slow; too small = blurry)
-            MAX_DIM = 1280
-            h, w = target_bgr.shape[:2]
-            if max(h, w) > MAX_DIM:
-                scale = MAX_DIM / max(h, w)
-                target_bgr = cv2.resize(target_bgr, (int(w * scale), int(h * scale)))
+            # Preserve full resolution up to 2048px on the longest side.
+            # Going beyond that adds little visible quality on CPU but multiplies time.
+            MAX_DIM = 2048
+            orig_h, orig_w = target_bgr.shape[:2]
+            scale_down = 1.0
+            if max(orig_h, orig_w) > MAX_DIM:
+                scale_down = MAX_DIM / max(orig_h, orig_w)
+                target_bgr = cv2.resize(
+                    target_bgr,
+                    (int(orig_w * scale_down), int(orig_h * scale_down)),
+                    interpolation=cv2.INTER_LANCZOS4,
+                )
 
             source_faces = self._app.get(source_bgr)
             target_faces = self._app.get(target_bgr)
@@ -207,6 +215,14 @@ class FaceSwapper:
             # Always apply OpenCV enhancement — no extra deps needed
             if enhance:
                 result = self._enhance_opencv(result, target_faces)
+
+            # If we downscaled, upscale back to original resolution with Lanczos
+            if scale_down < 1.0:
+                result = cv2.resize(
+                    result,
+                    (orig_w, orig_h),
+                    interpolation=cv2.INTER_LANCZOS4,
+                )
 
             return result, f"Swapped {len(target_faces)} face(s) successfully."
 
