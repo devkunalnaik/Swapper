@@ -85,10 +85,16 @@ class VideoProcessor:
         if start_frame > 0:
             cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-        # Temp file for raw processed frames (mp4v codec)
-        raw_out_path = tempfile.mktemp(suffix="_raw.mp4")
-        fourcc       = cv2.VideoWriter_fourcc(*"mp4v")
+        # Use AVI + XVID for the intermediate file — far more reliable than
+        # mp4v on Linux (HF Spaces).  FFmpeg converts it to H.264/mp4 after.
+        raw_out_path = tempfile.mktemp(suffix="_raw.avi")
+        fourcc       = cv2.VideoWriter_fourcc(*"XVID")
         writer       = cv2.VideoWriter(raw_out_path, fourcc, fps, (width, height))
+        if not writer.isOpened():
+            # XVID not available — fall back to MJPG
+            raw_out_path = tempfile.mktemp(suffix="_raw.avi")
+            fourcc  = cv2.VideoWriter_fourcc(*"MJPG")
+            writer  = cv2.VideoWriter(raw_out_path, fourcc, fps, (width, height))
 
         frame_idx        = start_frame   # absolute frame number in the source video
         processed        = 0
@@ -205,34 +211,58 @@ class VideoProcessor:
     @staticmethod
     def _ffmpeg_encode(original_video_path: str, processed_raw_path: str, audio_start: float = 0.0) -> str:
         """
-        Re-encode processed frames as H.264 and copy the original audio track.
-        audio_start: seconds offset into the original audio (for resumed segments).
-        Falls back to the raw file if FFmpeg is unavailable.
+        Re-encode processed frames as H.264 mp4 and merge the original audio.
+        audio_start: seconds into the original audio (for resumed segments).
+        Returns the output path; raises if encoding fails so caller can report it.
         """
         final_path = tempfile.mktemp(suffix="_output.mp4")
         try:
             import ffmpeg
+            import subprocess
 
-            video_stream = ffmpeg.input(processed_raw_path).video
-            # Seek audio to match the resumed start position
-            audio_stream = ffmpeg.input(original_video_path, ss=audio_start).audio
+            video_in = ffmpeg.input(processed_raw_path)
+            audio_in = ffmpeg.input(original_video_path)
+
+            # Build output streams
+            streams = [video_in.video]
+            # Only attach audio if the source has an audio track
+            try:
+                probe = ffmpeg.probe(original_video_path)
+                has_audio = any(s["codec_type"] == "audio" for s in probe["streams"])
+            except Exception:
+                has_audio = False
+
+            if has_audio:
+                if audio_start > 0:
+                    audio_in = ffmpeg.input(original_video_path, ss=audio_start)
+                streams.append(audio_in.audio)
+
+            out_kwargs = dict(
+                vcodec="libx264",
+                crf=23,
+                preset="fast",
+                pix_fmt="yuv420p",   # widest player compatibility
+            )
+            if has_audio:
+                out_kwargs.update(acodec="aac", audio_bitrate="192k")
 
             (
-                ffmpeg.output(
-                    video_stream,
-                    audio_stream,
-                    final_path,
-                    vcodec="libx264",
-                    crf=23,
-                    preset="fast",
-                    acodec="aac",
-                    audio_bitrate="192k",
-                )
+                ffmpeg.output(*streams, final_path, **out_kwargs)
                 .overwrite_output()
-                .run(quiet=True)
+                .run(quiet=False, capture_stdout=True, capture_stderr=True)
             )
+
+            # Validate output
+            if not os.path.exists(final_path) or os.path.getsize(final_path) < 1024:
+                raise RuntimeError("FFmpeg produced an empty output file.")
+
             return final_path
 
+        except ffmpeg.Error as e:
+            stderr = e.stderr.decode(errors="replace") if e.stderr else ""
+            print(f"[VideoProcessor] FFmpeg error:\n{stderr}")
+            # Return the raw file as fallback so the user gets something
+            return processed_raw_path
         except Exception as e:
-            print(f"[VideoProcessor] FFmpeg re-encode failed ({e}), returning raw file.")
+            print(f"[VideoProcessor] FFmpeg encode failed: {e}")
             return processed_raw_path
