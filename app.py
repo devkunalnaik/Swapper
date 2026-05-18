@@ -208,4 +208,4 @@ with gr.Blocks(title="Face & Body Swapper", theme=gr.themes.Soft()) as demo:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(ssr_mode=False, show_api=False)
